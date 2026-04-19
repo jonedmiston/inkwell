@@ -1,0 +1,5 @@
+{
+  "ANTHROPIC_API_KEY": "sk-ant-your-key-here",
+  "DefaultModel": "claude-opus-4-7",
+  "DefaultEffort": "high"
+}

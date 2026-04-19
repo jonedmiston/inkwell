@@ -1,0 +1,27 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+
+# User secrets
+appsettings.local.json
+secrets.json
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local test data
+sample-images/
+transcriptions/
+tdb/
+
+# Claude Code local state
+.claude/
