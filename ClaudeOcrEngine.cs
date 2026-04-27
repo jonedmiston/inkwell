@@ -4,14 +4,14 @@ using Anthropic.Models.Messages;
 
 namespace Inkwell.Services;
 
-public class TranscriptionService
+public class ClaudeOcrEngine : IOcrEngine
 {
     private readonly AnthropicClient _client;
     private readonly string _model;
     private readonly string _prompt;
     private readonly Effort _effort;
 
-    public TranscriptionService(AnthropicClient client, string model, string prompt, string effort)
+    public ClaudeOcrEngine(AnthropicClient client, string model, string prompt, string effort)
     {
         _client = client;
         _model = model;
@@ -25,11 +25,18 @@ public class TranscriptionService
         };
     }
 
-    public async Task<string> TranscribeAsync(string imagePath)
+    public async Task<string> TranscribeAsync(string imagePath, CancellationToken ct = default)
     {
-        var bytes = await File.ReadAllBytesAsync(imagePath);
-        var base64 = Convert.ToBase64String(bytes);
-        var mediaType = GetMediaType(imagePath);
+        var bytes = await File.ReadAllBytesAsync(imagePath, ct);
+        return await SendAsync(bytes, GetMediaType(imagePath));
+    }
+
+    public Task<string> TranscribePngAsync(byte[] pngBytes, CancellationToken ct = default)
+        => SendAsync(pngBytes, MediaType.ImagePng);
+
+    private async Task<string> SendAsync(byte[] imageBytes, MediaType mediaType)
+    {
+        var base64 = Convert.ToBase64String(imageBytes);
 
         var parameters = new MessageCreateParams
         {
