@@ -9,19 +9,21 @@ public class ClaudeOcrEngine : IOcrEngine
     private readonly AnthropicClient _client;
     private readonly string _model;
     private readonly string _prompt;
-    private readonly Effort _effort;
+    private readonly Effort? _effort;
 
-    public ClaudeOcrEngine(AnthropicClient client, string model, string prompt, string effort)
+    public ClaudeOcrEngine(AnthropicClient client, string model, string prompt, string? effort)
     {
         _client = client;
         _model = model;
         _prompt = prompt;
         _effort = effort switch
         {
+            null => null,
             "low" => Effort.Low,
             "medium" => Effort.Medium,
+            "high" => Effort.High,
             "max" => Effort.Max,
-            _ => Effort.High,
+            _ => null,
         };
     }
 
@@ -42,7 +44,7 @@ public class ClaudeOcrEngine : IOcrEngine
         {
             Model = _model,
             MaxTokens = 16000,
-            OutputConfig = new OutputConfig { Effort = _effort },
+            OutputConfig = _effort is { } eff ? new OutputConfig { Effort = eff } : null,
             Messages = new List<MessageParam>
             {
                 new()

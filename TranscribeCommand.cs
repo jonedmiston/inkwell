@@ -28,6 +28,10 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
         [Description("[[claude]] Path to a prompt file (default: built-in OCR prompt)")]
         public string? PromptFile { get; set; }
 
+        [CommandOption("-b|--book-mode")]
+        [Description("[[claude]] Use the book-mode prompt: merges multi-column pages into single-flow text. Ignored if --prompt is set.")]
+        public bool BookMode { get; set; }
+
         [CommandOption("-m|--model <model>")]
         [Description("[[claude]] Model ID (if omitted, you'll pick from the live list)")]
         public string? Model { get; set; }
@@ -84,6 +88,17 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
     private static readonly string[] ValidEffortLevels = ["low", "medium", "high", "max"];
     private static readonly string[] ValidEngines = ["claude", "tesseract"];
 
+    // Effort parameter is GA on Opus 4.5/4.6/4.7 and Sonnet 4.6 only.
+    // Sending it to Sonnet 4.5, Haiku 4.5, or older models returns 400.
+    // Match by substring so date-suffixed variants (e.g. claude-opus-4-7-20251015) work.
+    private static readonly string[] EffortSupportedPatterns =
+    [
+        "opus-4-5", "opus-4-6", "opus-4-7", "sonnet-4-6",
+    ];
+
+    private static bool ModelSupportsEffort(string modelId) =>
+        EffortSupportedPatterns.Any(p => modelId.Contains(p, StringComparison.OrdinalIgnoreCase));
+
     private static readonly Dictionary<string, string> TessDataSources = new(StringComparer.OrdinalIgnoreCase)
     {
         ["best"] = "https://github.com/tesseract-ocr/tessdata_best/raw/main/{0}.traineddata",
@@ -105,6 +120,25 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
         ".jpg", ".jpeg", ".png", ".gif", ".webp",
         ".pdf",
     };
+
+    private const string BookModePrompt = """
+        You are an expert OCR engine specialized in transcribing text from book pages with maximum accuracy.
+
+        Your task is to transcribe the visible printed text in the provided image.
+
+        Rules:
+        - Perform an exact transcription of all visible printed text. Do not summarize, interpret, correct spelling, or add any commentary.
+        - Output PLAIN TEXT ONLY. Do not use any Markdown syntax: no `#` for headings, no `**` or `_` for emphasis, no `-` or `*` for bullets unless those exact characters appear in the original, no `|` table syntax, no code fences, no links.
+        - This page may have multiple columns. Read all columns in natural reading order: top-to-bottom within each column, left-to-right across columns. Merge the columns into a single continuous flow of text.
+        - Do not preserve column structure or per-column line breaks. Let paragraphs flow naturally as if the text had been typeset in a single column. Use a single blank line to separate paragraphs.
+        - When a word is hyphenated across a line break, join the parts back into one word (e.g. "compre-\nhensive" becomes "comprehensive"). Preserve hyphens that are part of the actual word.
+        - Skip page numbers, running headers, and running footers unless they are part of the body content (e.g. a chapter title that opens the body text).
+        - Preserve all in-body punctuation, numbers, symbols, italics intent (as plain text), and footnote markers exactly as they appear.
+        - For unclear, illegible, or cut-off text, mark clearly as [illegible] or [unclear: description] - do not guess or invent content.
+        - Output ONLY the transcription. Do not include any explanations, introductions, conclusions, or extra text outside the transcription itself.
+
+        Begin the transcription now.
+        """;
 
     private const string DefaultPrompt = """
         You are an expert OCR engine specialized in precise, character-by-character transcription of typed or printed text from images.
@@ -364,11 +398,14 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
             }
             : new AnthropicClient { ApiKey = apiKey };
 
-        var effortRaw = settings.EffortLevel ?? config["DefaultEffort"] ?? "high";
-        var effortLower = effortRaw.ToLowerInvariant();
-        if (!ValidEffortLevels.Contains(effortLower))
+        // Effort is optional. If neither --effort nor DefaultEffort is set, omit the
+        // parameter entirely (API default is "high"). This also avoids 400s on models
+        // that don't accept the parameter at all (Haiku 4.5, Sonnet 4.5, older).
+        var effortExplicit = settings.EffortLevel ?? config["DefaultEffort"];
+        string? effortLower = effortExplicit?.ToLowerInvariant();
+        if (effortLower is not null && !ValidEffortLevels.Contains(effortLower))
         {
-            AnsiConsole.MarkupLine($"[red]Error:[/] Invalid effort level: [yellow]{Markup.Escape(effortRaw)}[/]");
+            AnsiConsole.MarkupLine($"[red]Error:[/] Invalid effort level: [yellow]{Markup.Escape(effortExplicit!)}[/]");
             AnsiConsole.MarkupLine($"Valid options: [green]{string.Join("[/], [green]", ValidEffortLevels)}[/]");
             return (null, []);
         }
@@ -380,7 +417,18 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
             if (model is null) return (null, []);
         }
 
+        // If the chosen model doesn't support effort, drop it. Warn only if the user
+        // explicitly asked for a value (so we don't yell at people on Haiku for
+        // letting effort default).
+        if (effortLower is not null && !ModelSupportsEffort(model))
+        {
+            AnsiConsole.MarkupLine(
+                $"[yellow]Note:[/] [cyan]{Markup.Escape(model)}[/] does not support the effort parameter; ignoring [yellow]--effort {Markup.Escape(effortLower)}[/].");
+            effortLower = null;
+        }
+
         string prompt;
+        string promptLabel;
         if (!string.IsNullOrWhiteSpace(settings.PromptFile))
         {
             if (!File.Exists(settings.PromptFile))
@@ -389,18 +437,25 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
                 return (null, []);
             }
             prompt = await File.ReadAllTextAsync(settings.PromptFile);
+            promptLabel = Markup.Escape(settings.PromptFile);
+        }
+        else if (settings.BookMode)
+        {
+            prompt = BookModePrompt;
+            promptLabel = "[cyan]book-mode[/] [dim](built-in)[/]";
         }
         else
         {
             prompt = DefaultPrompt;
+            promptLabel = "[dim]built-in[/]";
         }
 
         var rows = new List<(string, string)>
         {
             ("Engine", "[cyan]claude[/]"),
             ("Model", Markup.Escape(model)),
-            ("Effort", effortLower),
-            ("Prompt", string.IsNullOrWhiteSpace(settings.PromptFile) ? "[dim]built-in[/]" : Markup.Escape(settings.PromptFile)),
+            ("Effort", effortLower ?? "[dim]API default[/]"),
+            ("Prompt", promptLabel),
             ("Timeout", settings.TimeoutSeconds is int t ? $"{t}s" : "[dim]SDK default[/]"),
         };
 
@@ -558,6 +613,8 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
         if (settings.PdfDpi is int dpi) yield return ("pdf-dpi", dpi.ToString());
         if (!string.IsNullOrEmpty(settings.Model)) yield return ("model", settings.Model);
         if (!string.IsNullOrEmpty(settings.EffortLevel)) yield return ("effort", settings.EffortLevel);
+        if (settings.BookMode) yield return ("book-mode", "true");
+        if (!string.IsNullOrEmpty(settings.PromptFile)) yield return ("prompt", settings.PromptFile);
         if (!string.IsNullOrEmpty(settings.Language)) yield return ("language", settings.Language);
     }
 
@@ -602,27 +659,8 @@ public class TranscribeCommand : AsyncCommand<TranscribeCommand.Settings>
 
     private static async Task<string?> PromptForModelAsync(AnthropicClient client)
     {
-        List<string> modelIds = [];
-        try
-        {
-            await AnsiConsole.Status()
-                .StartAsync("Fetching available models...", async _ =>
-                {
-                    var page = await client.Models.List();
-                    modelIds = page.Items.Select(m => m.ID).ToList();
-                });
-        }
-        catch (Exception ex)
-        {
-            AnsiConsole.MarkupLine($"[red]Error fetching models:[/] {Markup.Escape(ex.Message)}");
-            return null;
-        }
-
-        if (modelIds.Count == 0)
-        {
-            AnsiConsole.MarkupLine("[red]No models returned from the API.[/]");
-            return null;
-        }
+        var modelIds = await ModelCatalog.FetchAsync(client);
+        if (modelIds is null) return null;
 
         return AnsiConsole.Prompt(
             new SelectionPrompt<string>()

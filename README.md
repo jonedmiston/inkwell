@@ -101,6 +101,20 @@ Or after publishing:
 inkwell <source-directory> [options]
 ```
 
+### Interactive mode
+
+If you launch inkwell with **no arguments at all** (and stdin is a terminal), it walks you through the most common settings — engine, source, output, recurse, skip-existing, then engine-specific options (book-mode, prompt file, model, effort, timeout for Claude; language for Tesseract). Useful when you don't want to memorize the flags.
+
+```bash
+inkwell
+```
+
+Pass any flag to bypass the interactive flow and use the regular CLI.
+
+### Book mode
+
+For multi-column books where you want a single continuous text file (not the original column layout), pass `-b` / `--book-mode`. inkwell swaps in a built-in prompt that tells Claude to read columns in reading order, merge them into a single flow, dehyphenate words split across lines, and skip page numbers / running headers. `--prompt` overrides this if you want a fully custom prompt.
+
 ### Options
 
 | Option | Engine | Default | Description |
@@ -115,6 +129,7 @@ inkwell <source-directory> [options]
 | `--log <path>` | both | `./inkwell-<timestamp>.log` | Path for the run log file |
 | `--no-log` | both | off | Disable the run log entirely |
 | `-p`, `--prompt <file>` | claude | built-in OCR prompt | Path to a custom prompt file |
+| `-b`, `--book-mode` | claude | off | Use the book-mode prompt: merges multi-column pages into single-flow text. Ignored if `--prompt` is set. |
 | `-m`, `--model <id>` | claude | `DefaultModel`, else *interactive picker* | Claude model ID (e.g. `claude-opus-4-7`) |
 | `-e`, `--effort <level>` | claude | `DefaultEffort`, else `high` | `low`, `medium`, `high`, or `max` |
 | `-t`, `--timeout <seconds>` | claude | SDK default | Per-request HTTP timeout. Increase for large images / high effort. |

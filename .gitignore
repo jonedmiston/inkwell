@@ -25,3 +25,6 @@ tdb/
 
 # Claude Code local state
 .claude/
+
+# inkwell run logs
+inkwell-*.log
