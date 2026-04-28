@@ -4,38 +4,47 @@ using Anthropic.Models.Messages;
 
 namespace Inkwell.Services;
 
-public class TranscriptionService
+public class ClaudeOcrEngine : IOcrEngine
 {
     private readonly AnthropicClient _client;
     private readonly string _model;
     private readonly string _prompt;
-    private readonly Effort _effort;
+    private readonly Effort? _effort;
 
-    public TranscriptionService(AnthropicClient client, string model, string prompt, string effort)
+    public ClaudeOcrEngine(AnthropicClient client, string model, string prompt, string? effort)
     {
         _client = client;
         _model = model;
         _prompt = prompt;
         _effort = effort switch
         {
+            null => null,
             "low" => Effort.Low,
             "medium" => Effort.Medium,
+            "high" => Effort.High,
             "max" => Effort.Max,
-            _ => Effort.High,
+            _ => null,
         };
     }
 
-    public async Task<string> TranscribeAsync(string imagePath)
+    public async Task<string> TranscribeAsync(string imagePath, CancellationToken ct = default)
     {
-        var bytes = await File.ReadAllBytesAsync(imagePath);
-        var base64 = Convert.ToBase64String(bytes);
-        var mediaType = GetMediaType(imagePath);
+        var bytes = await File.ReadAllBytesAsync(imagePath, ct);
+        return await SendAsync(bytes, GetMediaType(imagePath));
+    }
+
+    public Task<string> TranscribePngAsync(byte[] pngBytes, CancellationToken ct = default)
+        => SendAsync(pngBytes, MediaType.ImagePng);
+
+    private async Task<string> SendAsync(byte[] imageBytes, MediaType mediaType)
+    {
+        var base64 = Convert.ToBase64String(imageBytes);
 
         var parameters = new MessageCreateParams
         {
             Model = _model,
             MaxTokens = 16000,
-            OutputConfig = new OutputConfig { Effort = _effort },
+            OutputConfig = _effort is { } eff ? new OutputConfig { Effort = eff } : null,
             Messages = new List<MessageParam>
             {
                 new()
